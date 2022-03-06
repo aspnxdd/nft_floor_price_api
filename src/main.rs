@@ -1,18 +1,17 @@
-use actix_web::web::Data;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 
 use futures::future::{BoxFuture, FutureExt};
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::StreamExt;
 
 use bson::DateTime;
 use chrono::prelude::*;
-use mongodb::bson::oid::ObjectId;
-use mongodb::bson::{bson, doc, Bson, Document};
+
+use mongodb::bson::{doc, Bson};
 use mongodb::error::Error;
-use mongodb::options::{FindOptions, UpdateOptions};
+use mongodb::options::UpdateOptions;
 use mongodb::{options::ClientOptions, Client, Collection};
 use serde::{Deserialize, Serialize};
-use serde_json::{to_string, Value};
+use serde_json::Value;
 use std::fmt::Debug;
 use std::fs;
 use std::sync::{Arc, RwLock};
@@ -27,36 +26,31 @@ struct Item {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CollectionItem {
     pub collection: String,
-    pub data: Vec<DataItem>,
+    pub data: Vec<Marketplaces>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct CollectionItemPipeline {
-    pub collection: String,
-    pub data: Document,
+pub struct Marketplaces {
+    pub marketplace: String,
+    pub data: Vec<DataItem>,
 }
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DataItem {
     pub price: f64,
     pub time: DateTime,
-    pub marketplace: String,
 }
 
-async fn index(_req: HttpRequest, client: web::Data<Conn>) -> HttpResponse {
-    /*let solanart_url = "https://qzlsklfacc.medianetwork.cloud/nft_for_sale?collection=";
+async fn index(req: HttpRequest, client: web::Data<Conn>) -> HttpResponse {
+    let mut collection = None;
+    if let Some(content_type) = get_content_type(&req) {
+        println!("1 - {}", content_type);
+        format!("Got content-type = '{}'", content_type);
+        collection = Some(content_type);
+    } else {
+        "No id header found".to_string();
+    };
 
-    let body = reqwest::get(solanart_url.to_string() + &"thugbirdz".to_string())
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-
-    // println!("body = {:?}", body);
-    // println!("REQ: {:?}", req);
-    body*/
-    let data = client.get_collection("thugbirdz").await;
+    let data = client.get_collection(collection.unwrap()).await;
 
     match data {
         Ok(value) => match value {
@@ -65,6 +59,10 @@ async fn index(_req: HttpRequest, client: web::Data<Conn>) -> HttpResponse {
         },
         Err(_) => HttpResponse::NotFound().await.unwrap(),
     }
+}
+
+fn get_content_type<'a>(req: &'a HttpRequest) -> Option<&'a str> {
+    req.headers().get("id")?.to_str().ok()
 }
 
 async fn index_all_vaults(_req: HttpRequest, client: web::Data<Conn>) -> HttpResponse {
@@ -86,23 +84,24 @@ async fn index_all_vaults(_req: HttpRequest, client: web::Data<Conn>) -> HttpRes
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let conn = Conn::new().await;
-    let client_ref = conn.clone();
+
     // conn.get_all_collections().await;
-    // save_de(client_ref).await;
+    // save_de(&conn).await;
+    save_so(&conn).await;
 
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(conn.clone()))
             .wrap(middleware::Logger::default())
-            .service(web::resource("/vault").to(index))
-            .service(web::resource("/allvaults").to(index_all_vaults))
+            .service(web::resource("/load").to(index))
+            .service(web::resource("/loadall").to(index_all_vaults))
     })
     .bind("127.0.0.1:8080")?
     .run()
     .await
 }
 
-async fn save_de(conn: Conn) {
+async fn save_de(conn: &Conn) {
     let path = "./src/collectionsDigitalEyes.json";
     let data = fs::read_to_string(path).expect("Unable to read file");
     let res: Vec<Item> = serde_json::from_str(&data).expect("Unable to parse");
@@ -111,15 +110,20 @@ async fn save_de(conn: Conn) {
     for collection in &res {
         let fp = Arc::new(RwLock::new(0));
 
-        let floor_price: u64 = fetch_de(&collection.url, &next_cursor, fp).await.unwrap();
+        let floor_price: u64 = fetch_de(&collection.url, next_cursor, fp).await.unwrap();
         println!("{:?}\n", collection.url);
         println!("price {:?}", floor_price);
-        conn.update_collection(&collection.name, floor_price).await;
+        conn.update_collection(
+            &collection.name,
+            (floor_price / 1000000000) as f64,
+            "de".to_string(),
+        )
+        .await;
     }
 }
 
 fn fetch_de(url: &str, next_cursor: &str, fp: Arc<RwLock<u64>>) -> BoxFuture<'static, Option<u64>> {
-    let url = url.to_string();
+    let url = String::from(url);
     let next_cursor = next_cursor.to_string();
     async move {
         let mut next_cursor_v = "";
@@ -129,7 +133,7 @@ fn fetch_de(url: &str, next_cursor: &str, fp: Arc<RwLock<u64>>) -> BoxFuture<'st
 
         let body = reqwest::get(format!(
             "{}{}&cursor={}",
-            digitaleyes_url.to_string(),
+            digitaleyes_url.to_owned(),
             url,
             next_cursor
         ))
@@ -158,12 +162,8 @@ fn fetch_de(url: &str, next_cursor: &str, fp: Arc<RwLock<u64>>) -> BoxFuture<'st
                     if let Value::Number(data) = &nft {
                         let nft_price = data.as_u64().unwrap();
 
-                        if price.is_none() {
+                        if price.is_none() || nft_price < price.unwrap() {
                             price = Some(nft_price);
-                        } else {
-                            if nft_price < price.unwrap() {
-                                price = Some(nft_price);
-                            };
                         }
                     }
                 }
@@ -177,6 +177,47 @@ fn fetch_de(url: &str, next_cursor: &str, fp: Arc<RwLock<u64>>) -> BoxFuture<'st
         }
     }
     .boxed()
+}
+
+async fn save_so(conn: &Conn) {
+    let path = "./src/collectionsSolanart.json";
+    let data = fs::read_to_string(path).expect("Unable to read file");
+    let res: Vec<Item> = serde_json::from_str(&data).expect("Unable to parse");
+
+    let solanart_url = "https://qzlsklfacc.medianetwork.cloud/nft_for_sale?collection=";
+
+    for collection in &res {
+        let body = reqwest::get(solanart_url.to_string() + &collection.url.to_string())
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        let mut fp: Option<f64> = None;
+        if let Value::Array(list) = &body {
+            for item in list {
+                if let Value::Object(nft) = &item {
+                    // El body es de la variant object
+                    let price = nft.get("price").unwrap();
+
+                    if let Value::Number(price) = &price {
+                        let nft_price = price.as_f64().unwrap();
+
+                        if fp.is_none() || nft_price < fp.unwrap() {
+                            fp = Some(nft_price);
+                        }
+
+                        println!("price: {:?}", fp);
+                    }
+                }
+            }
+        }
+        println!("---- {:?}", fp);
+        if fp.is_some() {
+            conn.update_collection(&collection.name, fp.unwrap(), "so".to_string())
+                .await
+        };
+    }
 }
 
 #[derive(Clone)]
@@ -201,22 +242,54 @@ impl Conn {
     }
 
     pub async fn get_collection(&self, name: &str) -> Result<Option<CollectionItem>, Error> {
-        self.database
-            .find_one(
-                doc! {
-                    "collection": name.to_string()
-                },
-                None,
-            )
-            .await
+        println!("coll: {name}");
+        dbg!(
+            self.database
+                .find_one(
+                    doc! {
+                        "collection": name.to_owned()
+                    },
+                    None,
+                )
+                .await
+        )
     }
 
     pub async fn get_all_collections(&self) -> Result<Vec<CollectionItem>, Error> {
         let mut collections = Vec::new();
         let query = vec![
             doc! {
+                "$unwind": {
+                    "path": "$data"
+                }
+            },
+            doc! {
+                "$unwind": {
+                    "path": "$data.marketplace"
+                }
+            },
+            doc! {
                 "$sort": {
-                    "data.time": -1
+                    "data.data.time": -1
+                }
+            },
+            doc! {
+                "$set": {
+                    "collection": "$collection",
+                    "data.data": {
+                        "$last": "$data.data"
+                    }
+                }
+            },
+            doc! {
+                "$group": {
+                    "_id": "$_id",
+                    "collection": {
+                        "$first": "$collection"
+                    },
+                    "data": {
+                        "$addToSet": "$data"
+                    }
                 }
             },
             doc! {
@@ -225,22 +298,21 @@ impl Conn {
                 }
             },
             doc! {
-                "$group": {
-                    "_id": "$_id",
-                    "data": {
-                        "$last": "$data"
-                    },
-                    "collection": {
-                        "$last": "$collection"
-                    }
+                "$set": {
+                    "data.data": [
+                        "$data.data"
+                    ]
                 }
             },
             doc! {
-                "$set": {
-
-                    "data": [
-                        "$data"
-                    ]
+                "$group": {
+                    "_id": "$_id",
+                    "collection": {
+                        "$first": "$collection"
+                    },
+                    "data": {
+                        "$addToSet": "$data"
+                    }
                 }
             },
         ];
@@ -248,35 +320,47 @@ impl Conn {
         let mut data = self.database.aggregate(query, None).await?;
 
         while let Some(Ok(doc)) = data.next().await {
-            println!("a {:#?}", doc);
-
             let coll_item: CollectionItem = bson::from_document(doc).unwrap();
 
-            println!("x {:#?}", coll_item);
             collections.push(coll_item);
         }
         Ok(collections)
     }
 
-    pub async fn update_collection(&self, name: &str, price: u64) {
-        let filter = doc! {"collection": &name};
-        let price = Bson::Double(price as f64 / 1000000000 as f64);
-        let options = UpdateOptions::builder().upsert(Some(true)).build();
+    pub async fn update_collection(&self, name: &str, price: f64, marketplace: String) {
+        let price = Bson::Double(price);
 
+        let filter = doc! {"collection": &name, "data.marketplace":&marketplace};
+        let options = UpdateOptions::builder().upsert(Some(true)).build();
         let update = doc! {
             "$push":{
-                "data":{
+                "data.$.data":{
                     "price": &price,
-                    "time":bson::Bson::DateTime(bson::DateTime::from_chrono(Utc::now())),
-                    "marketplace":"de".to_string()
-                },
+                    "time":bson::Bson::DateTime(bson::DateTime::from_chrono(Utc::now()))
+                }
             }
         };
         let res = self
             .database
             .update_one(filter, update, Some(options))
-            .await
-            .unwrap();
-        println!("{:?}", res);
+            .await;
+
+        if res.is_err() {
+            let filter = doc! {"collection": &name};
+            let options = UpdateOptions::builder().upsert(Some(true)).build();
+
+            let update = doc! {
+                "$push":{
+                "data":{
+                    "marketplace":&marketplace.to_owned(),
+                        "data":[{
+                            "price": &price,
+                            "time":bson::Bson::DateTime(bson::DateTime::from_chrono(Utc::now()))
+                        }]
+                    }
+                }
+            };
+            let _res = self.database.update_one(filter, update, options).await;
+        }
     }
 }
