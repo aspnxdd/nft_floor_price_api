@@ -1,10 +1,12 @@
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
+use std::collections::HashMap;
 
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::StreamExt;
 
 use bson::DateTime;
 use chrono::prelude::*;
+use serde_json::{from_value, json};
 
 use mongodb::bson::{doc, Bson};
 use mongodb::error::Error;
@@ -38,6 +40,15 @@ pub struct Marketplaces {
 pub struct DataItem {
     pub price: f64,
     pub time: DateTime,
+    pub number_of_owners: u64,
+    pub number_of_tokens_listed: usize,
+    pub number_of_nft_per_owner: Bson,
+    pub avrg_price: f64,
+}
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FetchAPI {
+    pub owners: Vec<String>,
+    pub prices: Vec<f64>,
 }
 
 async fn index(req: HttpRequest, client: web::Data<Conn>) -> HttpResponse {
@@ -86,8 +97,8 @@ async fn main() -> std::io::Result<()> {
     let conn = Conn::new().await;
 
     // conn.get_all_collections().await;
-    // save_de(&conn).await;
-    save_so(&conn).await;
+    save_de(&conn).await;
+    // save_so(&conn).await;
 
     HttpServer::new(move || {
         App::new()
@@ -108,21 +119,70 @@ async fn save_de(conn: &Conn) {
 
     let next_cursor = "";
     for collection in &res {
-        let fp = Arc::new(RwLock::new(0));
+        let de_data = Arc::new(RwLock::new(FetchAPI {
+            owners: Vec::new(),
+            prices: Vec::new(),
+        }));
 
-        let floor_price: u64 = fetch_de(&collection.url, next_cursor, fp).await.unwrap();
-        println!("{:?}\n", collection.url);
-        println!("price {:?}", floor_price);
+        let api_data = fetch_de(&collection.url, next_cursor, de_data)
+            .await
+            .unwrap();
+
+        println!("{:?}\n", api_data);
+
+        let mut owners: HashMap<String, u32> = HashMap::new();
+
+        for owner in api_data.owners {
+            if let Some(x) = owners.get_mut(&owner) {
+                *x += 1;
+            } else {
+                owners.insert(owner.to_string(), 1);
+            }
+        }
+        let mut number_of_nft_per_owner: HashMap<u32, u32> = HashMap::new();
+        for nft in owners.values() {
+            if let Some(x) = number_of_nft_per_owner.get_mut(&nft) {
+                *x += 1;
+            } else {
+                number_of_nft_per_owner.insert(*nft, 1);
+            }
+        }
+        let number_of_tokens_listed = api_data.prices.len();
+        let avrg_price: f64 =
+            &api_data.prices.iter().sum() / 1000000000.0 / number_of_tokens_listed as f64;
+        let floor_price: f64 =
+            &api_data.prices.into_iter().reduce(f64::min).unwrap() / 1000000000.0;
+
+        let number_of_nft_per_owner = serde_json::to_string_pretty(&number_of_nft_per_owner).unwrap().to_string();
+        let number_of_nft_per_owner: Value = serde_json::from_str(&number_of_nft_per_owner).unwrap();
+        let number_of_nft_per_owner = Bson::try_from(number_of_nft_per_owner).unwrap();
+
+        println!("****  {:?}", &number_of_nft_per_owner);
+
+        let data_to_update = DataItem {
+            price: floor_price,
+            time: DateTime::from_chrono(Utc::now()),
+            number_of_owners: owners.keys().len() as u64,
+            number_of_tokens_listed,
+            number_of_nft_per_owner,
+            avrg_price,
+        };
+        
+
         conn.update_collection(
-            &collection.name,
-            (floor_price / 1000000000) as f64,
+            data_to_update,
             "de".to_string(),
+            collection.name.to_string(),
         )
         .await;
     }
 }
 
-fn fetch_de(url: &str, next_cursor: &str, fp: Arc<RwLock<u64>>) -> BoxFuture<'static, Option<u64>> {
+fn fetch_de(
+    url: &str,
+    next_cursor: &str,
+    de_data: Arc<RwLock<FetchAPI>>,
+) -> BoxFuture<'static, Option<FetchAPI>> {
     let url = String::from(url);
     let next_cursor = next_cursor.to_string();
     async move {
@@ -142,17 +202,13 @@ fn fetch_de(url: &str, next_cursor: &str, fp: Arc<RwLock<u64>>) -> BoxFuture<'st
         .json::<Value>()
         .await
         .unwrap();
+        
+        let mut de_data_mut = de_data.read().unwrap().clone();
 
-        let mut price: Option<u64> = None;
-
-        if *fp.read().unwrap() != 0 {
-            price = Some(*fp.read().unwrap());
-        }
         if let Value::Object(coll) = &body {
             // El body es de la variant object
             let num = coll.get("offers").unwrap();
             let next_cursor_value = coll.get("next_cursor").unwrap();
-
             if let Value::String(nextcursor) = &next_cursor_value {
                 next_cursor_v = nextcursor;
             }
@@ -160,21 +216,27 @@ fn fetch_de(url: &str, next_cursor: &str, fp: Arc<RwLock<u64>>) -> BoxFuture<'st
                 for item in offers {
                     let nft = item.get("price").unwrap();
                     if let Value::Number(data) = &nft {
-                        let nft_price = data.as_u64().unwrap();
+                        let nft_price = data.as_f64().unwrap();
 
-                        if price.is_none() || nft_price < price.unwrap() {
-                            price = Some(nft_price);
-                        }
+                        if nft_price > 0.0 {
+                            de_data_mut.prices.push(nft_price);
+                        };
+                    };
+                    let nft = item.get("owner").unwrap();
+                    if let Value::String(owner) = &nft {
+                        if owner.len() > 0 {
+                            de_data_mut.owners.push(owner.to_string());
+                        };
                     }
                 }
             }
-        }
-
+        };
+        // let x = *de_data.read().unwrap();
         if next_cursor_v.is_empty() {
-            Some(price.unwrap())
+            return Some(de_data_mut);
         } else {
-            fetch_de(&url, next_cursor_v, Arc::new(RwLock::new(price.unwrap()))).await
-        }
+            return fetch_de(&url, next_cursor_v, Arc::new(RwLock::new(de_data_mut))).await;
+        };
     }
     .boxed()
 }
@@ -187,6 +249,7 @@ async fn save_so(conn: &Conn) {
     let solanart_url = "https://qzlsklfacc.medianetwork.cloud/nft_for_sale?collection=";
 
     for collection in &res {
+        // let body = reqwest::get(format!("https://api.solanart.io/get_nft?collection={}&page={}&limit={}&order=price-ASC&min=0&max=99999&search=&listed=true&fits=all&bid=all",&collection.url,&page_counter, &limit_counter))
         let body = reqwest::get(solanart_url.to_string() + &collection.url.to_string())
             .await
             .unwrap()
@@ -213,10 +276,10 @@ async fn save_so(conn: &Conn) {
             }
         }
         println!("---- {:?}", fp);
-        if fp.is_some() {
-            conn.update_collection(&collection.name, fp.unwrap(), "so".to_string())
-                .await
-        };
+        // if fp.is_some() {
+        //     conn.update_collection(&collection.name, fp.unwrap(), "so".to_string())
+        //         .await
+        // };
     }
 }
 
@@ -327,16 +390,18 @@ impl Conn {
         Ok(collections)
     }
 
-    pub async fn update_collection(&self, name: &str, price: f64, marketplace: String) {
-        let price = Bson::Double(price);
-
+    pub async fn update_collection(&self, data: DataItem, marketplace: String, name: String) {
         let filter = doc! {"collection": &name, "data.marketplace":&marketplace};
         let options = UpdateOptions::builder().upsert(Some(true)).build();
         let update = doc! {
             "$push":{
                 "data.$.data":{
-                    "price": &price,
-                    "time":bson::Bson::DateTime(bson::DateTime::from_chrono(Utc::now()))
+                    "price":  Bson::Double(data.price),
+                    "time": data.time,
+                    "number_of_owners": Bson::Int32(data.number_of_owners as i32),
+                    "number_of_tokens_listed": Bson::Int32(data.number_of_tokens_listed as i32),
+                    "number_of_nft_per_owner": &data.number_of_nft_per_owner,
+                    "avrg_price": Bson::Double(data.avrg_price as f64)
                 }
             }
         };
@@ -348,14 +413,18 @@ impl Conn {
         if res.is_err() {
             let filter = doc! {"collection": &name};
             let options = UpdateOptions::builder().upsert(Some(true)).build();
-
+            
             let update = doc! {
                 "$push":{
-                "data":{
-                    "marketplace":&marketplace.to_owned(),
+                    "data":{
+                        "marketplace":&marketplace.to_owned(),
                         "data":[{
-                            "price": &price,
-                            "time":bson::Bson::DateTime(bson::DateTime::from_chrono(Utc::now()))
+                        "price":  Bson::Double(data.price),
+                        "time": data.time,
+                        "number_of_owners": Bson::Int32(data.number_of_owners as i32),
+                        "number_of_tokens_listed": Bson::Int32(data.number_of_tokens_listed as i32),
+                        "number_of_nft_per_owner": &data.number_of_nft_per_owner,
+                        "avrg_price": Bson::Double(data.avrg_price as f64)
                         }]
                     }
                 }
