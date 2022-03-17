@@ -1,4 +1,6 @@
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_cors::Cors;
+
 use std::collections::HashMap;
 
 use futures::future::{BoxFuture, FutureExt};
@@ -97,12 +99,22 @@ async fn main() -> std::io::Result<()> {
     let conn = Conn::new().await;
 
     // conn.get_all_collections().await;
-    save_de(&conn).await;
-    // save_so(&conn).await;
+    // save_de(&conn).await;
+    save_so(&conn).await;
 
     HttpServer::new(move || {
+        let cors = Cors::default()
+            //   .allowed_origin("http://localhost:3000")
+              .allow_any_origin()
+              .allow_any_header()
+              .allow_any_method()
+            //   .expose_headers(headers)
+            //   .allowed_methods(vec!["GET", "POST"])
+       
+              ;
         App::new()
             .app_data(web::Data::new(conn.clone()))
+            .wrap(cors)
             .wrap(middleware::Logger::default())
             .service(web::resource("/load").to(index))
             .service(web::resource("/loadall").to(index_all_vaults))
@@ -246,41 +258,120 @@ async fn save_so(conn: &Conn) {
     let data = fs::read_to_string(path).expect("Unable to read file");
     let res: Vec<Item> = serde_json::from_str(&data).expect("Unable to parse");
 
-    let solanart_url = "https://qzlsklfacc.medianetwork.cloud/nft_for_sale?collection=";
-
+    let next_cursor = "";
     for collection in &res {
-        // let body = reqwest::get(format!("https://api.solanart.io/get_nft?collection={}&page={}&limit={}&order=price-ASC&min=0&max=99999&search=&listed=true&fits=all&bid=all",&collection.url,&page_counter, &limit_counter))
-        let body = reqwest::get(solanart_url.to_string() + &collection.url.to_string())
-            .await
-            .unwrap()
-            .json::<Value>()
-            .await
-            .unwrap();
-        let mut fp: Option<f64> = None;
-        if let Value::Array(list) = &body {
-            for item in list {
-                if let Value::Object(nft) = &item {
-                    // El body es de la variant object
-                    let price = nft.get("price").unwrap();
+        let so_data = Arc::new(RwLock::new(FetchAPI {
+            owners: Vec::new(),
+            prices: Vec::new(),
+        }));
 
-                    if let Value::Number(price) = &price {
-                        let nft_price = price.as_f64().unwrap();
+        let api_data = fetch_so(&collection.url, so_data)
+            .await.unwrap();
+                        
+        
+        println!("{:?}\n", api_data);
 
-                        if fp.is_none() || nft_price < fp.unwrap() {
-                            fp = Some(nft_price);
-                        }
+        let mut owners: HashMap<String, u32> = HashMap::new();
 
-                        println!("price: {:?}", fp);
+        for owner in api_data.owners {
+            if let Some(x) = owners.get_mut(&owner) {
+                *x += 1;
+            } else {
+                owners.insert(owner.to_string(), 1);
+            }
+        }
+        let mut number_of_nft_per_owner: HashMap<u32, u32> = HashMap::new();
+        for nft in owners.values() {
+            if let Some(x) = number_of_nft_per_owner.get_mut(&nft) {
+                *x += 1;
+            } else {
+                number_of_nft_per_owner.insert(*nft, 1);
+            }
+        }
+        let number_of_tokens_listed = api_data.prices.len();
+        let avrg_price: f64 =
+            &api_data.prices.iter().sum() / 1000000000.0 / number_of_tokens_listed as f64;
+        let floor_price: f64 =
+            api_data.prices.into_iter().reduce(f64::min).unwrap() ;
+
+        let number_of_nft_per_owner = serde_json::to_string_pretty(&number_of_nft_per_owner).unwrap().to_string();
+        let number_of_nft_per_owner: Value = serde_json::from_str(&number_of_nft_per_owner).unwrap();
+        let number_of_nft_per_owner = Bson::try_from(number_of_nft_per_owner).unwrap();
+
+        println!("****  {:?}", &number_of_nft_per_owner);
+
+        let data_to_update = DataItem {
+            price: floor_price,
+            time: DateTime::from_chrono(Utc::now()),
+            number_of_owners: owners.keys().len() as u64,
+            number_of_tokens_listed,
+            number_of_nft_per_owner,
+            avrg_price,
+        };
+        
+        conn.update_collection(
+            data_to_update,
+            "so".to_string(),
+            collection.name.to_string(),
+        )
+        .await;
+    }
+}
+
+fn fetch_so(
+    url: &str,
+    so_data: Arc<RwLock<FetchAPI>>,
+) -> BoxFuture<'static, Option<FetchAPI>> {
+    let url = String::from(url);
+   
+    async move {
+        
+        let solanart_url =
+        "https://api.solanart.io/get_nft?collection=";
+
+        let body = reqwest::get(format!(
+            "{}{}&page=1&limit=99999999&order=price-ASC&min=0&max=99999&search=&listed=true&fits=all&bid=all",
+            solanart_url.to_owned(),
+            url
+       
+        ))
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+        
+        let mut so_data_mut = so_data.read().unwrap().clone();
+
+        if let Value::Object(coll) = &body {
+            // El body es de la variant object
+            let items = coll.get("items").unwrap();
+           
+            if let Value::Array(offers) = &items {
+                for item in offers {
+                    let nft = item.get("price").unwrap();
+                    if let Value::Number(data) = &nft {
+                        let nft_price = data.as_f64().unwrap();
+
+                        if nft_price > 0.0 {
+                            so_data_mut.prices.push(nft_price);
+                        };
+                    };
+                    let nft = item.get("seller_address").unwrap();
+                    if let Value::String(owner) = &nft {
+                        if owner.len() > 0 {
+                            so_data_mut.owners.push(owner.to_string());
+                        };
                     }
                 }
             }
-        }
-        println!("---- {:?}", fp);
-        // if fp.is_some() {
-        //     conn.update_collection(&collection.name, fp.unwrap(), "so".to_string())
-        //         .await
-        // };
+        };
+       
+       
+            return Some(so_data_mut);
+        
     }
+    .boxed()
 }
 
 #[derive(Clone)]
