@@ -1,15 +1,15 @@
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use actix_cors::Cors;
-
+extern crate redis;
 use std::collections::HashMap;
 
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::StreamExt;
 
-use bson::DateTime;
+use bson::{DateTime,bson};
 use chrono::prelude::*;
 use serde_json::{from_value, json};
-
+use std::ops::Deref;
 use mongodb::bson::{doc, Bson};
 use mongodb::error::Error;
 use mongodb::options::UpdateOptions;
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::Debug;
 use std::fs;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Item {
@@ -79,27 +79,40 @@ fn get_content_type<'a>(req: &'a HttpRequest) -> Option<&'a str> {
 }
 
 async fn index_all_vaults(_req: HttpRequest, client: web::Data<Conn>) -> HttpResponse {
-    let data = client.get_all_collections().await;
-
+    let data = dbg!(client.get_redis_data("loadall").await);
     match data {
         Ok(value) => {
-            let mut collections = Vec::new();
-            for val in value {
-                collections.push(val);
-            }
-            HttpResponse::Ok().json(collections)
-        }
+            
+            let coll_item: serde_json::Value = dbg!(serde_json::from_str(&value).unwrap_or_default());
+            println!("a - {:#?}",coll_item);
+            HttpResponse::Ok().json(coll_item)
+        },
+        Err(_) => {
 
-        Err(_) => HttpResponse::NotFound().await.unwrap(),
+            let data = client.get_all_collections().await;
+            match data {
+                Ok(value) => {
+                    let mut collections = Vec::new();
+                    for val in value {
+                        collections.push(val);
+                    }
+                    HttpResponse::Ok().json(collections)
+                }
+        
+                Err(_) => HttpResponse::NotFound().await.unwrap(),
+            }
+        }
     }
+
+    
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let conn = Conn::new().await;
-
+    
     // conn.get_all_collections().await;
-    // save_de(&conn).await;
+    save_de(&conn).await;
     save_so(&conn).await;
 
     HttpServer::new(move || {
@@ -258,12 +271,14 @@ async fn save_so(conn: &Conn) {
     let data = fs::read_to_string(path).expect("Unable to read file");
     let res: Vec<Item> = serde_json::from_str(&data).expect("Unable to parse");
 
-    let next_cursor = "";
+    
     for collection in &res {
         let so_data = Arc::new(RwLock::new(FetchAPI {
             owners: Vec::new(),
             prices: Vec::new(),
         }));
+        
+        
 
         let api_data = fetch_so(&collection.url, so_data)
             .await.unwrap();
@@ -290,7 +305,7 @@ async fn save_so(conn: &Conn) {
         }
         let number_of_tokens_listed = api_data.prices.len();
         let avrg_price: f64 =
-            &api_data.prices.iter().sum() / 1000000000.0 / number_of_tokens_listed as f64;
+            &api_data.prices.iter().sum() / number_of_tokens_listed as f64;
         let floor_price: f64 =
             api_data.prices.into_iter().reduce(f64::min).unwrap() ;
 
@@ -376,8 +391,10 @@ fn fetch_so(
 
 #[derive(Clone)]
 struct Conn {
-    client: Client,
-    database: Collection<CollectionItem>,
+    
+    mongo_db: Collection<CollectionItem>,
+    redis_conn: redis::aio::MultiplexedConnection
+    
 }
 
 impl Conn {
@@ -388,17 +405,20 @@ impl Conn {
             .unwrap();
 
         let client = Client::with_options(client_options).unwrap();
-        let database = client
+        let mongo_db = client
             .database("floorprice")
             .collection::<CollectionItem>("datafetcheds");
-
-        Self { client, database }
+        let redis_client = redis::Client::open("redis://127.0.0.1/").unwrap();
+        let redis_conn = redis_client.get_multiplexed_tokio_connection().await.unwrap();
+       
+    
+        Self {  mongo_db, redis_conn }
     }
 
     pub async fn get_collection(&self, name: &str) -> Result<Option<CollectionItem>, Error> {
         println!("coll: {name}");
         dbg!(
-            self.database
+            self.mongo_db
                 .find_one(
                     doc! {
                         "collection": name.to_owned()
@@ -409,7 +429,21 @@ impl Conn {
         )
     }
 
+    pub async fn get_redis_data(&self, key:&str) -> Result<String, redis::RedisError> {
+        let mut redis_conn = self.redis_conn.clone();
+
+        let res:String = redis::cmd("GET")
+        .arg(&key)
+        .query_async(&mut redis_conn).await?;
+
+        
+        println!("redis get {}",res);
+        Ok(res)
+        
+        
+    }
     pub async fn get_all_collections(&self) -> Result<Vec<CollectionItem>, Error> {
+        
         let mut collections = Vec::new();
         let query = vec![
             doc! {
@@ -471,13 +505,34 @@ impl Conn {
             },
         ];
         println!("pre find");
-        let mut data = self.database.aggregate(query, None).await?;
 
+        let mut data = self.mongo_db.aggregate(query, None).await?;
+        let mut collections_redis = Vec::new();
+        
         while let Some(Ok(doc)) = data.next().await {
+            let x = format!("{},",serde_json::to_string(&doc).unwrap());
+            println!("x - {}",x);
+            collections_redis.push(x);
             let coll_item: CollectionItem = bson::from_document(doc).unwrap();
-
+            
             collections.push(coll_item);
         }
+
+        collections_redis.last_mut().unwrap().pop().unwrap();
+
+
+        let collections_redis = format!("[{}]",collections_redis.join(""));
+
+        
+        
+        let mut redis_conn = self.redis_conn.clone();
+        
+        let _: () = redis::cmd("SETEX")
+        .arg("loadall")
+        .arg(1800 as usize)
+        .arg(&collections_redis)
+        .query_async(&mut redis_conn).await.unwrap_or_default();
+
         Ok(collections)
     }
 
@@ -497,7 +552,7 @@ impl Conn {
             }
         };
         let res = self
-            .database
+            .mongo_db
             .update_one(filter, update, Some(options))
             .await;
 
@@ -520,7 +575,7 @@ impl Conn {
                     }
                 }
             };
-            let _res = self.database.update_one(filter, update, options).await;
+            let _res = self.mongo_db.update_one(filter, update, options).await;
         }
     }
 }
