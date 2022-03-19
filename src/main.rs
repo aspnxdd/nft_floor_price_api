@@ -1,15 +1,14 @@
-use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use actix_cors::Cors;
+use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 extern crate redis;
 use std::collections::HashMap;
 
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::StreamExt;
 
-use bson::{DateTime,bson};
+use bson::DateTime;
 use chrono::prelude::*;
-use serde_json::{from_value, json};
-use std::ops::Deref;
+
 use mongodb::bson::{doc, Bson};
 use mongodb::error::Error;
 use mongodb::options::UpdateOptions;
@@ -18,7 +17,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::Debug;
 use std::fs;
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, RwLock};
+use tokio_cron_scheduler::{Job, JobScheduler};
+
+use tokio::sync::mpsc;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Item {
@@ -82,13 +84,12 @@ async fn index_all_vaults(_req: HttpRequest, client: web::Data<Conn>) -> HttpRes
     let data = dbg!(client.get_redis_data("loadall").await);
     match data {
         Ok(value) => {
-            
-            let coll_item: serde_json::Value = dbg!(serde_json::from_str(&value).unwrap_or_default());
-            println!("a - {:#?}",coll_item);
+            let coll_item: serde_json::Value =
+                dbg!(serde_json::from_str(&value).unwrap_or_default());
+            println!("a - {:#?}", coll_item);
             HttpResponse::Ok().json(coll_item)
-        },
+        }
         Err(_) => {
-
             let data = client.get_all_collections().await;
             match data {
                 Ok(value) => {
@@ -98,33 +99,47 @@ async fn index_all_vaults(_req: HttpRequest, client: web::Data<Conn>) -> HttpRes
                     }
                     HttpResponse::Ok().json(collections)
                 }
-        
+
                 Err(_) => HttpResponse::NotFound().await.unwrap(),
             }
         }
     }
-
-    
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let conn = Conn::new().await;
-    
-    // conn.get_all_collections().await;
-    save_de(&conn).await;
-    save_so(&conn).await;
+    let conn_c = conn.clone();
+    let mut sched = JobScheduler::new();
+
+    let (tx, mut rx) = mpsc::channel::<u8>(1);
+    tokio::spawn(async move {
+        loop {
+            rx.recv().await;
+            save_de(&conn_c).await;
+            save_so(&conn_c).await;
+        }
+    });
+
+    let async_job = Job::new_async("0 7 */1 * * *", move |_, _| {
+        let tx = tx.clone();
+        Box::pin(async move {
+            tx.send(1).await.unwrap();
+        })
+    })
+    .unwrap();
+
+    let _ = sched.add(async_job);
+    sched.start();
 
     HttpServer::new(move || {
         let cors = Cors::default()
-            //   .allowed_origin("http://localhost:3000")
-              .allow_any_origin()
-              .allow_any_header()
-              .allow_any_method()
-            //   .expose_headers(headers)
-            //   .allowed_methods(vec!["GET", "POST"])
-       
-              ;
+            .allowed_origin("http://localhost:3000")
+            .allowed_origin("https://www.nftfloorprice.art")
+            .allowed_origin("https://nftfloorprice.vercel.app")
+            .allow_any_header()
+            .allowed_methods(vec!["GET"]);
+
         App::new()
             .app_data(web::Data::new(conn.clone()))
             .wrap(cors)
@@ -166,7 +181,7 @@ async fn save_de(conn: &Conn) {
         }
         let mut number_of_nft_per_owner: HashMap<u32, u32> = HashMap::new();
         for nft in owners.values() {
-            if let Some(x) = number_of_nft_per_owner.get_mut(&nft) {
+            if let Some(x) = number_of_nft_per_owner.get_mut(nft) {
                 *x += 1;
             } else {
                 number_of_nft_per_owner.insert(*nft, 1);
@@ -178,8 +193,11 @@ async fn save_de(conn: &Conn) {
         let floor_price: f64 =
             &api_data.prices.into_iter().reduce(f64::min).unwrap() / 1000000000.0;
 
-        let number_of_nft_per_owner = serde_json::to_string_pretty(&number_of_nft_per_owner).unwrap().to_string();
-        let number_of_nft_per_owner: Value = serde_json::from_str(&number_of_nft_per_owner).unwrap();
+        let number_of_nft_per_owner = serde_json::to_string_pretty(&number_of_nft_per_owner)
+            .unwrap()
+            .to_string();
+        let number_of_nft_per_owner: Value =
+            serde_json::from_str(&number_of_nft_per_owner).unwrap();
         let number_of_nft_per_owner = Bson::try_from(number_of_nft_per_owner).unwrap();
 
         println!("****  {:?}", &number_of_nft_per_owner);
@@ -192,7 +210,6 @@ async fn save_de(conn: &Conn) {
             number_of_nft_per_owner,
             avrg_price,
         };
-        
 
         conn.update_collection(
             data_to_update,
@@ -227,7 +244,7 @@ fn fetch_de(
         .json::<Value>()
         .await
         .unwrap();
-        
+
         let mut de_data_mut = de_data.read().unwrap().clone();
 
         if let Value::Object(coll) = &body {
@@ -249,7 +266,7 @@ fn fetch_de(
                     };
                     let nft = item.get("owner").unwrap();
                     if let Value::String(owner) = &nft {
-                        if owner.len() > 0 {
+                        if !owner.is_empty() {
                             de_data_mut.owners.push(owner.to_string());
                         };
                     }
@@ -271,19 +288,14 @@ async fn save_so(conn: &Conn) {
     let data = fs::read_to_string(path).expect("Unable to read file");
     let res: Vec<Item> = serde_json::from_str(&data).expect("Unable to parse");
 
-    
     for collection in &res {
         let so_data = Arc::new(RwLock::new(FetchAPI {
             owners: Vec::new(),
             prices: Vec::new(),
         }));
-        
-        
 
-        let api_data = fetch_so(&collection.url, so_data)
-            .await.unwrap();
-                        
-        
+        let api_data = fetch_so(&collection.url, so_data).await.unwrap();
+
         println!("{:?}\n", api_data);
 
         let mut owners: HashMap<String, u32> = HashMap::new();
@@ -297,20 +309,21 @@ async fn save_so(conn: &Conn) {
         }
         let mut number_of_nft_per_owner: HashMap<u32, u32> = HashMap::new();
         for nft in owners.values() {
-            if let Some(x) = number_of_nft_per_owner.get_mut(&nft) {
+            if let Some(x) = number_of_nft_per_owner.get_mut(nft) {
                 *x += 1;
             } else {
                 number_of_nft_per_owner.insert(*nft, 1);
             }
         }
         let number_of_tokens_listed = api_data.prices.len();
-        let avrg_price: f64 =
-            &api_data.prices.iter().sum() / number_of_tokens_listed as f64;
-        let floor_price: f64 =
-            api_data.prices.into_iter().reduce(f64::min).unwrap() ;
+        let avrg_price: f64 = &api_data.prices.iter().sum() / number_of_tokens_listed as f64;
+        let floor_price: f64 = api_data.prices.into_iter().reduce(f64::min).unwrap();
 
-        let number_of_nft_per_owner = serde_json::to_string_pretty(&number_of_nft_per_owner).unwrap().to_string();
-        let number_of_nft_per_owner: Value = serde_json::from_str(&number_of_nft_per_owner).unwrap();
+        let number_of_nft_per_owner = serde_json::to_string_pretty(&number_of_nft_per_owner)
+            .unwrap()
+            .to_string();
+        let number_of_nft_per_owner: Value =
+            serde_json::from_str(&number_of_nft_per_owner).unwrap();
         let number_of_nft_per_owner = Bson::try_from(number_of_nft_per_owner).unwrap();
 
         println!("****  {:?}", &number_of_nft_per_owner);
@@ -323,7 +336,7 @@ async fn save_so(conn: &Conn) {
             number_of_nft_per_owner,
             avrg_price,
         };
-        
+
         conn.update_collection(
             data_to_update,
             "so".to_string(),
@@ -333,12 +346,9 @@ async fn save_so(conn: &Conn) {
     }
 }
 
-fn fetch_so(
-    url: &str,
-    so_data: Arc<RwLock<FetchAPI>>,
-) -> BoxFuture<'static, Option<FetchAPI>> {
+fn fetch_so(url: &str, so_data: Arc<RwLock<FetchAPI>>) -> BoxFuture<'static, Option<FetchAPI>> {
     let url = String::from(url);
-   
+
     async move {
         
         let solanart_url =
@@ -374,7 +384,7 @@ fn fetch_so(
                     };
                     let nft = item.get("seller_address").unwrap();
                     if let Value::String(owner) = &nft {
-                        if owner.len() > 0 {
+                        if !owner.is_empty() {
                             so_data_mut.owners.push(owner.to_string());
                         };
                     }
@@ -383,7 +393,7 @@ fn fetch_so(
         };
        
        
-            return Some(so_data_mut);
+             Some(so_data_mut)
         
     }
     .boxed()
@@ -391,59 +401,76 @@ fn fetch_so(
 
 #[derive(Clone)]
 struct Conn {
-    
     mongo_db: Collection<CollectionItem>,
-    redis_conn: redis::aio::MultiplexedConnection
-    
+    redis_conn: redis::aio::MultiplexedConnection,
 }
 
 impl Conn {
     // constructor
     pub async fn new() -> Self {
-        let client_options = ClientOptions::parse("mongodb://localhost:27017")
-            .await
-            .unwrap();
+        let mongo_url =
+            dotenv::var("MONGO_URL").unwrap_or_else(|_| "mongodb://localhost:27017".to_owned());
+        let redis_url =
+            dotenv::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_owned());
+
+        let client_options = ClientOptions::parse(mongo_url).await.unwrap();
 
         let client = Client::with_options(client_options).unwrap();
         let mongo_db = client
             .database("floorprice")
             .collection::<CollectionItem>("datafetcheds");
-        let redis_client = redis::Client::open("redis://127.0.0.1/").unwrap();
-        let redis_conn = redis_client.get_multiplexed_tokio_connection().await.unwrap();
-       
-    
-        Self {  mongo_db, redis_conn }
+        let redis_client = redis::Client::open(redis_url).unwrap();
+        let redis_conn = redis_client
+            .get_multiplexed_tokio_connection()
+            .await
+            .unwrap();
+
+        Self {
+            mongo_db,
+            redis_conn,
+        }
     }
 
     pub async fn get_collection(&self, name: &str) -> Result<Option<CollectionItem>, Error> {
         println!("coll: {name}");
-        dbg!(
-            self.mongo_db
-                .find_one(
-                    doc! {
-                        "collection": name.to_owned()
-                    },
-                    None,
-                )
-                .await
-        )
+
+        let res = self
+            .mongo_db
+            .find_one(doc! {"collection": name.to_owned()}, None)
+            .await?;
+
+        match &res {
+            Some(value) => {
+                let mut redis_conn = self.redis_conn.clone();
+
+                let x = format!("{},", serde_json::to_string(&value).unwrap());
+
+                let _: () = redis::cmd("SETEX")
+                    .arg(format!("load-{}", name))
+                    .arg(1800_usize)
+                    .arg(&x)
+                    .query_async(&mut redis_conn)
+                    .await
+                    .unwrap_or_default();
+
+                Ok(res)
+            }
+            None => Ok(None),
+        }
     }
 
-    pub async fn get_redis_data(&self, key:&str) -> Result<String, redis::RedisError> {
+    pub async fn get_redis_data(&self, key: &str) -> Result<String, redis::RedisError> {
         let mut redis_conn = self.redis_conn.clone();
 
-        let res:String = redis::cmd("GET")
-        .arg(&key)
-        .query_async(&mut redis_conn).await?;
+        let res: String = redis::cmd("GET")
+            .arg(&key)
+            .query_async(&mut redis_conn)
+            .await?;
 
-        
-        println!("redis get {}",res);
+        println!("redis get {}", res);
         Ok(res)
-        
-        
     }
     pub async fn get_all_collections(&self) -> Result<Vec<CollectionItem>, Error> {
-        
         let mut collections = Vec::new();
         let query = vec![
             doc! {
@@ -507,31 +534,24 @@ impl Conn {
         println!("pre find");
 
         let mut data = self.mongo_db.aggregate(query, None).await?;
-        let mut collections_redis = Vec::new();
-        
+
         while let Some(Ok(doc)) = data.next().await {
-            let x = format!("{},",serde_json::to_string(&doc).unwrap());
-            println!("x - {}",x);
-            collections_redis.push(x);
             let coll_item: CollectionItem = bson::from_document(doc).unwrap();
-            
+
             collections.push(coll_item);
         }
 
-        collections_redis.last_mut().unwrap().pop().unwrap();
-
-
-        let collections_redis = format!("[{}]",collections_redis.join(""));
-
-        
-        
         let mut redis_conn = self.redis_conn.clone();
-        
+
+        let collections_json = serde_json::to_string(&collections).unwrap();
+
         let _: () = redis::cmd("SETEX")
-        .arg("loadall")
-        .arg(1800 as usize)
-        .arg(&collections_redis)
-        .query_async(&mut redis_conn).await.unwrap_or_default();
+            .arg("loadall")
+            .arg(1800_usize)
+            .arg(&collections_json)
+            .query_async(&mut redis_conn)
+            .await
+            .unwrap_or_default();
 
         Ok(collections)
     }
@@ -559,7 +579,7 @@ impl Conn {
         if res.is_err() {
             let filter = doc! {"collection": &name};
             let options = UpdateOptions::builder().upsert(Some(true)).build();
-            
+
             let update = doc! {
                 "$push":{
                     "data":{
@@ -575,7 +595,7 @@ impl Conn {
                     }
                 }
             };
-            let _res = self.mongo_db.update_one(filter, update, options).await;
+            let _ = self.mongo_db.update_one(filter, update, options).await;
         }
     }
 }

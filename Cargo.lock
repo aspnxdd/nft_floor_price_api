@@ -439,6 +439,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cron"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "628a3464535cee4e75af89e8c293bab926deaddfa166553b75029066c846be3f"
+dependencies = [
+ "chrono",
+ "nom",
+]
+
+[[package]]
 name = "crypto-common"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -541,6 +551,12 @@ dependencies = [
  "block-buffer 0.10.2",
  "crypto-common",
 ]
+
+[[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
 
 [[package]]
 name = "dtoa"
@@ -1169,6 +1185,7 @@ dependencies = [
  "actix-web",
  "bson",
  "chrono",
+ "dotenv",
  "futures",
  "mongodb",
  "redis",
@@ -1177,6 +1194,16 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-cron-scheduler",
+]
+
+[[package]]
+name = "nom"
+version = "4.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c349f68f25f596b9f44cf0e7c69752a5c633b0550c3ff849518bfba0233774a"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -1952,6 +1979,18 @@ dependencies = [
  "socket2 0.4.4",
  "tokio-macros",
  "winapi",
+]
+
+[[package]]
+name = "tokio-cron-scheduler"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3609643364fe27df57e538ba45cf2a4dcf719d833a700a1a75b21ca29c62ee9f"
+dependencies = [
+ "chrono",
+ "cron",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
