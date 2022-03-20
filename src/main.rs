@@ -110,6 +110,8 @@ async fn index_all_vaults(_req: HttpRequest, client: web::Data<Conn>) -> HttpRes
 async fn main() -> std::io::Result<()> {
     let conn = Conn::new().await;
     let conn_c = conn.clone();
+    // save_so(&conn_c).await;
+    // save_de(&conn_c).await;
     let mut sched = JobScheduler::new();
 
     let (tx, mut rx) = mpsc::channel::<u8>(1);
@@ -170,6 +172,8 @@ async fn save_de(conn: &Conn) {
         let api_data = fetch_de(&collection.url, next_cursor, de_data)
             .await
             .unwrap();
+
+        if api_data.owners.is_empty() || api_data.prices.is_empty() {break;}
 
         println!("{:?}\n", api_data);
 
@@ -298,7 +302,7 @@ async fn save_so(conn: &Conn) {
         }));
 
         let api_data = fetch_so(&collection.url, so_data).await.unwrap();
-
+        if api_data.owners.is_empty() || api_data.prices.is_empty() {break;}
         println!("{:?}\n", api_data);
 
         let mut owners: HashMap<String, u32> = HashMap::new();

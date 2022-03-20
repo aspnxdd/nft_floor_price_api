@@ -13,8 +13,86 @@
     "name": "boldbadgers",
     "url": "boldbadgers",
     "tokens":10000
+  },
+  {
+    "name": "sollamas-gen2",
+    "url": "sollamas-gen2",
+    "tokens":10000
+  },
+  {
+    "name": "solanimals",
+    "url": "solanimals",
+    "tokens":10000
+  },
+  {
+    "name": "solbear",
+    "url": "solbears",
+    "tokens":10000
+  },
+  {
+    "name": "aurory",
+    "url": "aurory",
+    "tokens":10000
+  },
+  {
+    "name": "legionpunks",
+    "url": "legionpunks",
+    "tokens":10000
+  },
+  {
+    "name": "kaijucards",
+    "url": "kaijucards",
+    "tokens":10000
+  },
+  {
+    "name": "abstratica",
+    "url": "abstratica",
+    "tokens":10000
+  },
+  {
+    "name": "thugbirdz",
+    "url": "thugbirdz",
+    "tokens":3333
+  },
+  {
+    "name": "trippybunnytribe",
+    "url": "trippybunny",
+    "tokens":1111
+  },
+  {
+    "name": "piggysolgang",
+    "url": "piggysolgang",
+    "tokens":10000
+  },
+  {
+    "name": "sneks",
+    "url": "thesneks",
+    "tokens":10000
+  },
+  {
+    "name": "turtles",
+    "url": "turtles",
+    "tokens":10000
+  },
+  {
+    "name": "meerkat",
+    "url": "meerkatmillionairescc",
+    "tokens":10000
+  },
+  {
+    "name": "roguesharks",
+    "url": "roguesharks",
+    "tokens":5000
+  },
+  {
+    "name": "goblinlaboratory",
+    "url": "goblinlaboratory",
+    "tokens": 10000 
+  },
+  {
+    "name": "theslowpatrol",
+    "url": "theslowpatrol",
+    "tokens": 8888 
   }
- 
- 
   
 ]
