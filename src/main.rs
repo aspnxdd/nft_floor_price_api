@@ -132,6 +132,11 @@ async fn main() -> std::io::Result<()> {
     let _ = sched.add(async_job);
     sched.start();
 
+    let host = dotenv::var("HOST").unwrap_or_else( |_| "127.0.0.1".to_owned());
+    let port = dotenv::var("PORT").unwrap_or_else( |_| "8080".to_owned());
+
+    
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .allowed_origin("http://localhost:3000")
@@ -147,7 +152,7 @@ async fn main() -> std::io::Result<()> {
             .service(web::resource("/load").to(index))
             .service(web::resource("/loadall").to(index_all_vaults))
     })
-    .bind("127.0.0.1:8080")?
+    .bind(format!("{}:{}",host,port))?
     .run()
     .await
 }
@@ -417,7 +422,7 @@ impl Conn {
 
         let client = Client::with_options(client_options).unwrap();
         let mongo_db = client
-            .database("floorprice")
+            .database("floorpricerust")
             .collection::<CollectionItem>("datafetcheds");
         let redis_client = redis::Client::open(redis_url).unwrap();
         let redis_conn = redis_client
