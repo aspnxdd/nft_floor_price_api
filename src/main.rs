@@ -132,10 +132,8 @@ async fn main() -> std::io::Result<()> {
     let _ = sched.add(async_job);
     sched.start();
 
-    let host = dotenv::var("HOST").unwrap_or_else( |_| "127.0.0.1".to_owned());
-    let port = dotenv::var("PORT").unwrap_or_else( |_| "8080".to_owned());
-
-    
+    let host = dotenv::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
+    let port = dotenv::var("PORT").unwrap_or_else(|_| "8080".to_owned());
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -152,7 +150,7 @@ async fn main() -> std::io::Result<()> {
             .service(web::resource("/load").to(index))
             .service(web::resource("/loadall").to(index_all_vaults))
     })
-    .bind(format!("{}:{}",host,port))?
+    .bind(format!("{}:{}", host, port))?
     .run()
     .await
 }
