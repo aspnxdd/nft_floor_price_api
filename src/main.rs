@@ -81,7 +81,7 @@ fn get_content_type<'a>(req: &'a HttpRequest) -> Option<&'a str> {
 }
 
 async fn index_all_vaults(_req: HttpRequest, client: web::Data<Conn>) -> HttpResponse {
-    let data = dbg!(client.get_redis_data("loadall").await);
+    let data = client.get_redis_data("loadall").await;
     match data {
         Ok(value) => {
             let coll_item: serde_json::Value =
@@ -113,7 +113,7 @@ async fn main() -> std::io::Result<()> {
     // save_so(&conn_c).await;
     // save_de(&conn_c).await;
     let mut sched = JobScheduler::new();
-
+    
     let (tx, mut rx) = mpsc::channel::<u8>(1);
     tokio::spawn(async move {
         loop {
@@ -123,7 +123,7 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
-    let async_job = Job::new_async("0 7 */1 * * *", move |_, _| {
+    let async_job = Job::new_async("0 27 */1 * * *", move |_, _| {
         let tx = tx.clone();
         Box::pin(async move {
             tx.send(1).await.unwrap();
@@ -160,10 +160,11 @@ async fn main() -> std::io::Result<()> {
 async fn save_de(conn: &Conn) {
     let path = "./src/collectionsDigitalEyes.json";
     let data = fs::read_to_string(path).expect("Unable to read file");
-    let res: Vec<Item> = serde_json::from_str(&data).expect("Unable to parse");
+    let res: Vec<Item> = dbg!(serde_json::from_str(&data).expect("Unable to parse"));
 
     let next_cursor = "";
     for collection in &res {
+        println!("$ {}", collection.name);
         let de_data = Arc::new(RwLock::new(FetchAPI {
             owners: Vec::new(),
             prices: Vec::new(),
@@ -173,9 +174,11 @@ async fn save_de(conn: &Conn) {
             .await
             .unwrap();
 
-        if api_data.owners.is_empty() || api_data.prices.is_empty() {break;}
+        if api_data.owners.is_empty() || api_data.prices.is_empty() {
+            continue;
+        }
 
-        println!("{:?}\n", api_data);
+        
 
         let mut owners: HashMap<String, u32> = HashMap::new();
 
@@ -207,7 +210,7 @@ async fn save_de(conn: &Conn) {
             serde_json::from_str(&number_of_nft_per_owner).unwrap();
         let number_of_nft_per_owner = Bson::try_from(number_of_nft_per_owner).unwrap();
 
-        println!("****  {:?}", &number_of_nft_per_owner);
+        
 
         let data_to_update = DataItem {
             price: floor_price,
@@ -300,10 +303,11 @@ async fn save_so(conn: &Conn) {
             owners: Vec::new(),
             prices: Vec::new(),
         }));
+        println!("$ {}", collection.name);
 
         let api_data = fetch_so(&collection.url, so_data).await.unwrap();
         if api_data.owners.is_empty() || api_data.prices.is_empty() {break;}
-        println!("{:?}\n", api_data);
+       
 
         let mut owners: HashMap<String, u32> = HashMap::new();
 
@@ -333,7 +337,7 @@ async fn save_so(conn: &Conn) {
             serde_json::from_str(&number_of_nft_per_owner).unwrap();
         let number_of_nft_per_owner = Bson::try_from(number_of_nft_per_owner).unwrap();
 
-        println!("****  {:?}", &number_of_nft_per_owner);
+       
 
         let data_to_update = DataItem {
             price: floor_price,
@@ -439,7 +443,7 @@ impl Conn {
     }
 
     pub async fn get_collection(&self, name: &str) -> Result<Option<CollectionItem>, Error> {
-        println!("coll: {name}");
+        
 
         let res = self
             .mongo_db
@@ -474,7 +478,7 @@ impl Conn {
             .query_async(&mut redis_conn)
             .await?;
 
-        println!("redis get {}", res);
+       
         Ok(res)
     }
     pub async fn get_all_collections(&self) -> Result<Vec<CollectionItem>, Error> {
@@ -538,7 +542,7 @@ impl Conn {
                 }
             },
         ];
-        println!("pre find");
+        
 
         let mut data = self.mongo_db.aggregate(query, None).await?;
 

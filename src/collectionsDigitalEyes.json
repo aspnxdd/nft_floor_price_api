@@ -17,7 +17,7 @@
   {
     "name": "abstratica",
     "url": "Abstratica",
-    "tokens":10000
+    "tokens": 10000
   },
   {
     "name": "frakt",
@@ -97,12 +97,9 @@
   },
   {
     "name": "bitboat",
-    "url": "BitBoat"
+    "url": "BitBoat:%20BitBoats"
   },
-  {
-    "name": "solstash",
-    "url": "Stash"
-  },
+
   {
     "name": "kaijucards",
     "url": "Kaiju%20Cards"
@@ -126,11 +123,6 @@
     "name": "trippybunnytribe",
     "url": "Trippy%20Bunny%20Tribe",
     "tokens": 10000
-  },
-  {
-    "name": "boogle",
-    "url": "Boogle",
-    "tokens": 100
   },
   {
     "name": "shroomz",
@@ -192,11 +184,7 @@
     "url": "SolPanda%20NFT",
     "tokens": 8888
   },
-  {
-    "name": "konwi",
-    "url": "Konwi's",
-    "tokens": 20
-  },
+
   {
     "name": "trashypandas",
     "url": "TrashyPandas",
@@ -225,76 +213,71 @@
   {
     "name": "meerkat",
     "url": "Meerkat%20Millionaires%20Country%20Club",
-    "tokens": 9999  
+    "tokens": 9999
   },
   {
     "name": "bionicthugbirdz",
     "url": "Bionic%20Thugbirdz",
-    "tokens": 666  
+    "tokens": 666
   },
   {
     "name": "fastfoodthugbirdz",
     "url": "Fast%20Food%20Thugbirdz",
-    "tokens": 555  
+    "tokens": 555
   },
   {
     "name": "sloot",
     "url": "sLoot",
-    "tokens": 3200  
+    "tokens": 3200
   },
   {
     "name": "solmees",
     "url": "Solana%20Mees",
-    "tokens": 20000  
+    "tokens": 20000
   },
   {
     "name": "goldensolmeesawards",
     "url": "Golden%20SolMee%20Awards",
-    "tokens": 20000  
+    "tokens": 20000
   },
   {
     "name": "solanasamuraijourney",
     "url": "SSJ%20Solana%20Samurai%20Journey",
-    "tokens": 500  
+    "tokens": 500
   },
   {
     "name": "Nechromatics",
     "url": "Nechromatics",
-    "tokens": 100  
+    "tokens": 100
   },
   {
     "name": "meremarbles",
     "url": "Mere%20Marbles",
-    "tokens": 1111  
+    "tokens": 1111
   },
   {
     "name": "nftreessolana",
     "url": "NFTrees%20Solana",
-    "tokens": 1111  
+    "tokens": 1111
   },
   {
     "name": "bannurs",
     "url": "Bannurs",
-    "tokens": 2001  
+    "tokens": 2001
   },
   {
     "name": "goblinlaboratory",
     "url": "Goblin%20Laboratory",
-    "tokens": 10000 
+    "tokens": 10000
   },
   {
     "name": "theslowpatrol",
     "url": "The%20Slow%20Patrol",
-    "tokens": 8888 
+    "tokens": 8888
   },
   {
     "name": "angryworms",
     "url": "AngryWorms",
-    "tokens": 8888 
-  },
-  {
-    "name": "skull_division",
-    "url": "Skull%20Division",
-    "tokens": 8888 
+    "tokens": 8888
   }
 ]
