@@ -306,7 +306,9 @@ async fn save_so(conn: &Conn) {
         println!("$ {}", collection.name);
 
         let api_data = fetch_so(&collection.url, so_data).await.unwrap();
-        if api_data.owners.is_empty() || api_data.prices.is_empty() {break;}
+        if api_data.owners.is_empty() || api_data.prices.is_empty() {
+            continue;
+        }
        
 
         let mut owners: HashMap<String, u32> = HashMap::new();
