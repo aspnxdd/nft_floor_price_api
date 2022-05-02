@@ -9,5 +9,5 @@ jobs:
   deploy:
     runs-on: ubuntu-16.04
     steps:
-      -name: test
-      run: echo "test"
+      - name: test
+        run: echo "test"
